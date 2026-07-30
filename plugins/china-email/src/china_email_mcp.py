@@ -31,7 +31,9 @@ from typing import Any, Callable
 SERVER_NAME = "china-email"
 SERVER_VERSION = "0.1.0"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
-DEFAULT_CONFIG_PATH = pathlib.Path.home() / ".china-email" / "accounts.json"
+DEFAULT_CONFIG_RELATIVE_PATH = pathlib.Path(".config") / "china-email" / "accounts.json"
+DEFAULT_CONFIG_PATH = pathlib.Path.home() / DEFAULT_CONFIG_RELATIVE_PATH
+DEFAULT_CONFIG_DISPLAY_PATH = f"~/{DEFAULT_CONFIG_RELATIVE_PATH.as_posix()}"
 DEFAULT_ATTACHMENT_DIR = pathlib.Path.home() / "Downloads" / "china-email-attachments"
 MAX_LIMIT = 50
 DEFAULT_SCAN_LIMIT = 100
@@ -286,7 +288,7 @@ def resolve_account(name: str | None = None) -> dict[str, Any]:
     accounts, _ = load_accounts()
     if not accounts:
         raise ToolError(
-            "No email accounts configured. Create ~/.china-email/accounts.json or set CHINA_EMAIL_* variables."
+            f"No email accounts configured. Create {DEFAULT_CONFIG_DISPLAY_PATH} or set CHINA_EMAIL_* variables."
         )
     if name:
         for account in accounts:
@@ -854,7 +856,7 @@ def render_setup_page(token: str, provider: str | None = None, account_name: str
 <body>
   <main>
     <h1>国内邮箱配置向导</h1>
-    <p>选择邮箱服务商，填入邮箱地址和客户端授权码。配置会保存在本机 <code>~/.china-email/accounts.json</code>，不会上传到外部服务。</p>
+    <p>选择邮箱服务商，填入邮箱地址和客户端授权码。配置会保存在本机 <code>{html_escape(DEFAULT_CONFIG_DISPLAY_PATH)}</code>，不会上传到外部服务。</p>
     {message_html}
     <form method="post" action="/save">
       <input type="hidden" name="token" value="{html_escape(token)}">

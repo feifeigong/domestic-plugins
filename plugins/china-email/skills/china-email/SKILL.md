@@ -15,7 +15,7 @@ The plugin is protocol-based, so prefer IMAP search and message reads before mak
 - The mailbox must have IMAP/SMTP enabled in the provider's web settings.
 - The password should be an authorization code, app password, or client password.
 - Prefer `china_email_start_setup` for setup so users do not need to edit JSON.
-- The account config is saved to `~/.china-email/accounts.json` by the setup wizard, and can still be overridden with `CHINA_EMAIL_CONFIG` or single-account environment variables.
+- The account config is saved to `~/.config/china-email/accounts.json` by the setup wizard, and can still be overridden with `CHINA_EMAIL_CONFIG` or single-account environment variables.
 
 ## Workflow
 

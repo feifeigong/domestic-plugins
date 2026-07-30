@@ -42,11 +42,11 @@ python3 ./src/china_email_mcp.py setup
 Manual configuration is still supported. Create an account file outside the plugin directory:
 
 ```bash
-mkdir -p ~/.china-email
-cp ./config/accounts.example.json ~/.china-email/accounts.json
+mkdir -p ~/.config/china-email
+cp ./config/accounts.example.json ~/.config/china-email/accounts.json
 ```
 
-Then edit `~/.china-email/accounts.json`.
+Then edit `~/.config/china-email/accounts.json`.
 
 Use email client authorization codes or app passwords, not normal web login passwords.
 For many domestic providers, IMAP/SMTP must be enabled in the web mailbox settings first.

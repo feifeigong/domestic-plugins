@@ -23,11 +23,11 @@
 也可以手动配置：
 
 ```bash
-mkdir -p ~/.china-email
-cp ./plugins/china-email/config/accounts.example.json ~/.china-email/accounts.json
+mkdir -p ~/.config/china-email
+cp ./plugins/china-email/config/accounts.example.json ~/.config/china-email/accounts.json
 ```
 
-编辑 `~/.china-email/accounts.json`，填入邮箱地址、账号名和客户端授权码。
+编辑 `~/.config/china-email/accounts.json`，填入邮箱地址、账号名和客户端授权码。
 
 不要使用网页登录密码；QQ、网易等邮箱通常需要先在网页端设置里开启 IMAP/SMTP，并生成授权码或客户端专用密码。
 
@@ -36,4 +36,4 @@ cp ./plugins/china-email/config/accounts.example.json ~/.china-email/accounts.js
 把这个仓库发布到 GitHub 后，其他用户在 Codex App 中打开或克隆该仓库即可看到这个本地插件市场。
 如果要进入官方公共插件市场，还需要按官方发布流程提交审核；本仓库已经具备本地 marketplace 结构。
 
-本仓库只提交插件源码和示例配置，不包含任何真实邮箱账号、授权码或本机缓存。真实账号配置会保存在使用者自己的 `~/.china-email/accounts.json`。
+本仓库只提交插件源码和示例配置，不包含任何真实邮箱账号、授权码或本机缓存。真实账号配置会保存在使用者自己的 `~/.config/china-email/accounts.json`。
