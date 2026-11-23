@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import datetime as dt
 import email
 import email.utils
@@ -29,13 +31,15 @@ from typing import Any, Callable
 
 
 SERVER_NAME = "china-email"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_CONFIG_PATH = pathlib.Path.home() / ".china-email" / "accounts.json"
 DEFAULT_ATTACHMENT_DIR = pathlib.Path.home() / "Downloads" / "china-email-attachments"
 MAX_LIMIT = 50
 DEFAULT_SCAN_LIMIT = 100
 MAX_SCAN_LIMIT = 500
+MAX_UID = 4294967295
+MAX_REPORTED_READ_ERRORS = 5
 DEFAULT_BODY_CHARS = 12000
 MAX_BODY_CHARS = 80000
 DEFAULT_SETUP_TTL_SECONDS = 900
@@ -50,6 +54,16 @@ DRAFT_MAILBOX_CANDIDATES: dict[str, list[str]] = {
     "yeah": ["&g0l6P3ux-", "Drafts"],
 }
 COMMON_DRAFT_MAILBOX_CANDIDATES = ["Drafts", "&g0l6P3ux-", "草稿箱", "草稿"]
+SENT_MAILBOX_NAMES = {
+    "sent", "sent items", "sent messages", "sent mail", "sent-mail", "sentmail",
+    "已发送", "已发送邮件", "已发送的邮件", "已寄出", "已傳送", "寄件备份", "寄件備份",
+}
+IMAP_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+IMAP_LIST_ENTRY = re.compile(
+    r'^\((?P<flags>[^)]*)\)\s+(?P<delimiter>NIL|"(?:[^"\\]|\\.)*")\s+'
+    r'(?P<name>"(?:[^"\\]|\\.)*"|\S+)(?=\s|$)',
+    re.IGNORECASE,
+)
 
 
 PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
@@ -378,7 +392,7 @@ def to_text(value: Any) -> str:
 
 def parse_date(value: str) -> str:
     parsed = dt.date.fromisoformat(value)
-    return parsed.strftime("%d-%b-%Y")
+    return f"{parsed.day:02}-{IMAP_MONTHS[parsed.month - 1]}-{parsed.year:04}"
 
 
 def clamp_int(value: Any, default_value: int, min_value: int, max_value: int) -> int:
@@ -389,10 +403,16 @@ def clamp_int(value: Any, default_value: int, min_value: int, max_value: int) ->
     return max(min_value, min(max_value, parsed))
 
 
-def extract_uid_list(response: list[bytes]) -> list[str]:
-    if not response or not response[0]:
-        return []
-    return [uid.decode("ascii", errors="ignore") for uid in response[0].split() if uid]
+def parse_uid_number(value: Any, field: str) -> int:
+    text = to_text(value)
+    if not re.fullmatch(r"[1-9][0-9]{0,9}", text) or int(text) > MAX_UID:
+        raise ToolError(f"{field} must be an integer between 1 and {MAX_UID}.")
+    return int(text)
+
+
+def extract_uid_list(response: list[bytes]) -> list[int]:
+    uids = {parse_uid_number(uid, "IMAP search UID") for line in response if line for uid in line.split()}
+    return sorted(uids, reverse=True)
 
 
 def build_search_criteria(query: dict[str, Any]) -> list[str]:
@@ -408,29 +428,43 @@ def build_search_criteria(query: dict[str, Any]) -> list[str]:
     return criteria
 
 
-def select_mailbox(client: imaplib.IMAP4, mailbox: str) -> int:
+def select_mailbox(client: imaplib.IMAP4, mailbox: str) -> int | None:
     status, response = client.select(format_mailbox_arg(mailbox), readonly=True)
     require_ok(status, response, f"select mailbox {mailbox}")
-    try:
-        return int(response[0] or 0)
-    except (TypeError, ValueError):
-        return 0
+    if response and response[-1] and response[-1].isdigit():
+        return int(response[-1])
+    return None
 
 
 def format_mailbox_arg(mailbox: str) -> str:
+    def encode_segment(match: re.Match[str]) -> str:
+        if match[0] == "&":
+            return "&-"
+        encoded = base64.b64encode(match[0].encode("utf-16-be")).decode("ascii")
+        return "&" + encoded.rstrip("=").replace("/", ",") + "-"
+
+    if any(ord(char) < 32 or ord(char) == 127 for char in mailbox):
+        raise ToolError("Mailbox names cannot contain control characters.")
+    if not mailbox.isascii():
+        mailbox = re.sub(r"&|[^\x00-\x7f]+", encode_segment, mailbox)
     if re.fullmatch(r"[A-Za-z0-9._&+=/-]+", mailbox):
         return mailbox
     escaped = mailbox.replace("\\", "\\\\").replace('"', r"\"")
     return f'"{escaped}"'
 
 
-def fetch_headers(client: imaplib.IMAP4, uid: str) -> dict[str, Any] | None:
+def fetch_headers(client: imaplib.IMAP4, uid: str) -> dict[str, Any]:
     status, response = client.uid("FETCH", uid, "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER])")
-    if status != "OK":
-        return None
-    raw_header = find_bytes_payload(response)
+    raw_header = find_bytes_payload(response) if status == "OK" else None
     if not raw_header:
-        return None
+        # Some servers return a header subset when the full header is unavailable.
+        status, response = client.uid(
+            "FETCH", uid, "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO CC DATE MESSAGE-ID)])"
+        )
+        require_ok(status, response, f"fetch headers for UID {uid}")
+        raw_header = find_bytes_payload(response)
+    if not raw_header:
+        raise ToolError(f"Message {uid} has no fetchable headers.")
     message = email.message_from_bytes(raw_header, policy=default)
     return {
         "uid": uid,
@@ -447,12 +481,8 @@ def fetch_headers(client: imaplib.IMAP4, uid: str) -> dict[str, Any] | None:
 
 def find_bytes_payload(response: list[Any]) -> bytes | None:
     for item in response:
-        if isinstance(item, tuple):
-            for part in item:
-                if isinstance(part, bytes) and b"\r\n" in part:
-                    return part
-        elif isinstance(item, bytes) and b"\r\n" in item:
-            return item
+        if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], bytes) and item[1]:
+            return item[1]
     return None
 
 
@@ -527,53 +557,113 @@ def fetch_raw_message(client: imaplib.IMAP4, uid: str) -> bytes:
     return raw
 
 
+def decode_mailbox_name(name: str) -> str:
+    def decode_segment(match: re.Match[str]) -> str:
+        encoded = match[1].replace(",", "/")
+        if not encoded:
+            return "&"
+        try:
+            padded = encoded + "=" * (-len(encoded) % 4)
+            return base64.b64decode(padded, validate=True).decode("utf-16-be")
+        except (binascii.Error, UnicodeError):
+            return match[0]
+
+    return re.sub(r"&([A-Za-z0-9+,]*)-", decode_segment, name)
+
+
+def parse_list_mailbox(item: Any) -> dict[str, Any] | None:
+    prefix, literal = item if isinstance(item, tuple) else (item, None)
+    match = IMAP_LIST_ENTRY.match(to_text(prefix))
+    if not match:
+        return None
+    name = to_text(literal) if literal is not None else unquote_imap(match["name"])
+    if not name:
+        return None
+    flags = match["flags"].split()
+    lowered_flags = {flag.casefold() for flag in flags}
+    delimiter = match["delimiter"]
+    return {
+        "name": name,
+        "display_name": decode_mailbox_name(name),
+        "delimiter": None if delimiter.upper() == "NIL" else unquote_imap(delimiter),
+        "flags": flags,
+        "selectable": not lowered_flags.intersection({"\\noselect", "\\nonexistent"}),
+    }
+
+
+def unquote_imap(value: str) -> str:
+    if value.startswith('"'):
+        return re.sub(r'\\(["\\])', r"\1", value[1:-1])
+    return value
+
+
+def fetch_mailboxes(client: imaplib.IMAP4) -> list[dict[str, Any]]:
+    if "SPECIAL-USE" in client.capabilities:
+        try:
+            status, response = client.list('""', '"*" RETURN (SPECIAL-USE)')
+        except imaplib.IMAP4.abort:
+            raise
+        except imaplib.IMAP4.error:
+            status = "BAD"
+        if status == "OK" and any(response):
+            return [mailbox for item in response if (mailbox := parse_list_mailbox(item))]
+
+    status, response = client.list()
+    require_ok(status, response, "list mailboxes")
+    return [mailbox for item in response if (mailbox := parse_list_mailbox(item))]
+
+
+def discover_sent_mailbox(client: imaplib.IMAP4) -> str:
+    selectable = [folder for folder in fetch_mailboxes(client) if folder["selectable"]]
+    marked = [folder for folder in selectable if any(flag.casefold() == "\\sent" for flag in folder["flags"])]
+    candidates = marked
+    if not candidates:
+        for folder in selectable:
+            name, separator = folder["display_name"], folder["delimiter"]
+            leaf = name.rsplit(separator, 1)[-1] if separator else name
+            if leaf.strip().casefold() in SENT_MAILBOX_NAMES:
+                candidates.append(folder)
+    if len(candidates) == 1:
+        return candidates[0]["name"]
+    names = ", ".join(folder["name"] for folder in candidates or selectable) or "none"
+    if candidates:
+        raise ToolError(f"Multiple possible Sent mailboxes. Specify mailbox explicitly. Candidates: {names}")
+    raise ToolError(f"Could not identify the Sent mailbox. Specify mailbox explicitly. Available mailboxes: {names}")
+
+
+def resolve_mailbox(client: imaplib.IMAP4, args: dict[str, Any]) -> str:
+    name, role = args.get("mailbox"), args.get("mailbox_role")
+    if name and role:
+        raise ToolError("Specify mailbox or mailbox_role, not both.")
+    if role == "sent":
+        return discover_sent_mailbox(client)
+    if role not in {None, "inbox"}:
+        raise ToolError("mailbox_role must be inbox or sent.")
+    return str(name or "INBOX")
+
+
 def discover_draft_mailbox(client: imaplib.IMAP4, account: dict[str, Any], requested: str | None = None) -> str:
     if requested:
         return requested
 
-    status, response = client.list()
-    require_ok(status, response, "list mailboxes")
-    mailboxes: list[str] = []
-    for item in response:
-        text = to_text(item)
-        name = parse_list_mailbox_name(text)
-        if not name:
-            continue
-        mailboxes.append(name)
-        if has_imap_list_attribute(text, "\\Drafts"):
-            return name
+    folders = [folder for folder in fetch_mailboxes(client) if folder["selectable"]]
+    for folder in folders:
+        if any(flag.casefold() == "\\drafts" for flag in folder["flags"]):
+            return folder["name"]
 
+    mailboxes = [folder["name"] for folder in folders]
     candidates = DRAFT_MAILBOX_CANDIDATES.get(str(account.get("provider") or "").lower(), []) + COMMON_DRAFT_MAILBOX_CANDIDATES
     for candidate in candidates:
         if candidate in mailboxes:
             return candidate
 
-    for name in mailboxes:
-        lowered = name.lower()
-        if lowered.endswith("/drafts") or lowered == "drafts" or "draft" in lowered or "草稿" in name:
-            return name
+    for folder in folders:
+        displayed = folder["display_name"]
+        if "draft" in displayed.lower() or "草稿" in displayed:
+            return folder["name"]
 
     available = ", ".join(mailboxes) or "none"
     raise ToolError(f"Could not find Drafts mailbox. Specify draft_mailbox explicitly. Available mailboxes: {available}")
-
-
-def parse_list_mailbox_name(value: str) -> str | None:
-    match = re.search(r'"((?:[^"\\]|\\.)*)"\s*$', value)
-    if match:
-        return unescape_imap_quoted(match.group(1))
-    match = re.search(r'\)\s+(?:NIL|"[^"]*")\s+(.+)\s*$', value)
-    if match:
-        return match.group(1).strip()
-    return None
-
-
-def unescape_imap_quoted(value: str) -> str:
-    return value.replace(r"\"", '"').replace(r"\\", "\\")
-
-
-def has_imap_list_attribute(list_line: str, attribute: str) -> bool:
-    first_group = list_line.split(")", 1)[0].lower()
-    return attribute.lower() in first_group.split()
 
 
 def append_draft_message(
@@ -1193,11 +1283,14 @@ def list_accounts(_: dict[str, Any]) -> dict[str, Any]:
 def test_connection(args: dict[str, Any]) -> dict[str, Any]:
     account = resolve_account(args.get("account"))
     checks = {"imap": None, "smtp": None}
+    imap_mailbox = None
 
     if args.get("check_imap", True):
         client = connect_imap(account)
         try:
-            select_mailbox(client, str(args.get("mailbox") or "INBOX"))
+            mailbox = resolve_mailbox(client, args)
+            count = select_mailbox(client, mailbox)
+            imap_mailbox = {"name": mailbox, "message_count": count}
             checks["imap"] = "ok"
         finally:
             try:
@@ -1213,12 +1306,46 @@ def test_connection(args: dict[str, Any]) -> dict[str, Any]:
         finally:
             client.quit()
 
-    return tool_result({"account": public_account(account), "checks": checks})
+    return tool_result({"account": public_account(account), "checks": checks, "imap_mailbox": imap_mailbox})
+
+
+def list_mailboxes(args: dict[str, Any]) -> dict[str, Any]:
+    account = resolve_account(args.get("account"))
+    client = connect_imap(account)
+    try:
+        folders = fetch_mailboxes(client)
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass
+    return tool_result({"account": public_account(account), "mailboxes": folders})
+
+
+def selected_uid_validity(client: imaplib.IMAP4, expected: Any) -> int | None:
+    _, response = client.response("UIDVALIDITY")
+    current = parse_uid_number(response[-1], "IMAP UIDVALIDITY") if response and response[-1] else None
+    if expected is not None and parse_uid_number(expected, "uid_validity") != current:
+        raise ToolError("The mailbox UIDVALIDITY changed or is unavailable. Restart the search without a cursor.")
+    return current
+
+
+def search_status(message_count: int | None, criteria: list[str], returned: int, scanned: int, failed: int, has_more: bool) -> str:
+    if failed:
+        return "read_failed" if failed == scanned else "partial_read"
+    if returned:
+        return "ok"
+    if has_more:
+        return "scan_incomplete"
+    if message_count == 0 and scanned == 0:
+        return "empty_mailbox"
+    if criteria == ["ALL"] and scanned == 0:
+        return "imap_visibility_unknown"
+    return "no_match"
 
 
 def search_messages(args: dict[str, Any]) -> dict[str, Any]:
     account = resolve_account(args.get("account"))
-    mailbox = str(args.get("mailbox") or "INBOX")
     query = args.get("query") or {}
     if not isinstance(query, dict):
         raise ToolError("query must be an object.")
@@ -1226,23 +1353,39 @@ def search_messages(args: dict[str, Any]) -> dict[str, Any]:
     limit = clamp_int(args.get("limit"), 10, 1, MAX_LIMIT)
     scan_limit = clamp_int(args.get("scan_limit"), DEFAULT_SCAN_LIMIT, 1, MAX_SCAN_LIMIT)
     criteria = build_search_criteria(query)
+    before_arg = args.get("before_uid")
+    before_uid = parse_uid_number(before_arg, "before_uid") if before_arg is not None else None
+    search_criteria = criteria if before_uid is None else [*criteria, "UID", f"1:{before_uid - 1}"]
 
+    messages: list[dict[str, Any]] = []
+    read_errors: list[dict[str, str]] = []
+    scanned_count = failed_count = 0
     client = connect_imap(account)
     try:
-        select_mailbox(client, mailbox)
-        status, response = client.uid("SEARCH", None, *criteria)
-        require_ok(status, response, "search")
-        candidate_uids = extract_uid_list(response)[-scan_limit:]
-        messages: list[dict[str, Any]] = []
-        for uid in reversed(candidate_uids):
-            summary = fetch_headers(client, uid)
-            if not summary:
+        mailbox = resolve_mailbox(client, args)
+        mailbox_count = select_mailbox(client, mailbox)
+        uid_validity = selected_uid_validity(client, args.get("uid_validity"))
+        candidate_uids = []
+        if before_uid != 1:
+            status, response = client.uid("SEARCH", None, *search_criteria)
+            require_ok(status, response, "search")
+            candidate_uids = extract_uid_list(response)
+            if before_uid is not None:
+                candidate_uids = [uid for uid in candidate_uids if uid < before_uid]
+        for uid in candidate_uids[:scan_limit]:
+            scanned_count += 1
+            try:
+                summary = fetch_headers(client, str(uid))
+                body_text = ""
+                if query.get("text"):
+                    raw = fetch_raw_message(client, str(uid))
+                    parsed = email.message_from_bytes(raw, policy=default)
+                    body_text, _ = message_to_text(parsed)
+            except (ToolError, email.errors.MessageError, ValueError, LookupError) as exc:
+                failed_count += 1
+                if len(read_errors) < MAX_REPORTED_READ_ERRORS:
+                    read_errors.append({"uid": str(uid), "message": str(exc)[:300]})
                 continue
-            body_text = ""
-            if query.get("text"):
-                raw = fetch_raw_message(client, uid)
-                parsed = email.message_from_bytes(raw, policy=default)
-                body_text, _ = message_to_text(parsed)
             if matches_query(summary, query, body_text):
                 messages.append(summary)
             if len(messages) >= limit:
@@ -1253,6 +1396,7 @@ def search_messages(args: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
 
+    has_more = scanned_count < len(candidate_uids)
     return tool_result(
         {
             "account": public_account(account),
@@ -1260,6 +1404,15 @@ def search_messages(args: dict[str, Any]) -> dict[str, Any]:
             "criteria": criteria,
             "scan_limit": scan_limit,
             "limit": limit,
+            "status": search_status(mailbox_count, search_criteria, len(messages), scanned_count, failed_count, has_more),
+            "mailbox_message_count": mailbox_count,
+            "candidate_count": len(candidate_uids),
+            "scanned_count": scanned_count,
+            "failed_count": failed_count,
+            "read_errors": read_errors,
+            "has_more": has_more,
+            "next_before_uid": candidate_uids[scanned_count - 1] if has_more else None,
+            "uid_validity": uid_validity,
             "messages": messages,
         }
     )
@@ -1267,15 +1420,14 @@ def search_messages(args: dict[str, Any]) -> dict[str, Any]:
 
 def read_message(args: dict[str, Any]) -> dict[str, Any]:
     account = resolve_account(args.get("account"))
-    mailbox = str(args.get("mailbox") or "INBOX")
-    uid = str(args.get("uid") or "")
-    if not uid:
-        raise ToolError("uid is required.")
+    uid = str(parse_uid_number(args.get("uid"), "uid"))
     max_body_chars = clamp_int(args.get("max_body_chars"), DEFAULT_BODY_CHARS, 100, MAX_BODY_CHARS)
 
     client = connect_imap(account)
     try:
+        mailbox = resolve_mailbox(client, args)
         select_mailbox(client, mailbox)
+        selected_uid_validity(client, args.get("uid_validity"))
         raw = fetch_raw_message(client, uid)
     finally:
         try:
@@ -1305,10 +1457,7 @@ def read_message(args: dict[str, Any]) -> dict[str, Any]:
 
 def save_attachments(args: dict[str, Any]) -> dict[str, Any]:
     account = resolve_account(args.get("account"))
-    mailbox = str(args.get("mailbox") or "INBOX")
-    uid = str(args.get("uid") or "")
-    if not uid:
-        raise ToolError("uid is required.")
+    uid = str(parse_uid_number(args.get("uid"), "uid"))
 
     output_dir = expand_path(args.get("output_dir")) or expand_path(os.environ.get("CHINA_EMAIL_ATTACHMENT_DIR")) or DEFAULT_ATTACHMENT_DIR
     assert output_dir is not None
@@ -1316,7 +1465,9 @@ def save_attachments(args: dict[str, Any]) -> dict[str, Any]:
 
     client = connect_imap(account)
     try:
+        mailbox = resolve_mailbox(client, args)
         select_mailbox(client, mailbox)
+        selected_uid_validity(client, args.get("uid_validity"))
         raw = fetch_raw_message(client, uid)
     finally:
         try:
@@ -1452,6 +1603,25 @@ def send_email(args: dict[str, Any]) -> dict[str, Any]:
     return tool_result({"sent": True, "refused": refused, "preview": preview})
 
 
+MAILBOX_PROPERTIES = {
+    "mailbox": {
+        "type": "string",
+        "description": "Exact mailbox name returned by list/search. Defaults to INBOX if mailbox_role is omitted.",
+    },
+    "mailbox_role": {
+        "type": "string",
+        "enum": ["inbox", "sent"],
+        "description": "Use sent to discover the server's Sent mailbox. Omit mailbox when setting this field.",
+    },
+}
+UID_VALIDITY_PROPERTY = {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": MAX_UID,
+    "description": "Pass the UIDVALIDITY returned by search when following a cursor or using a search result UID.",
+}
+
+
 TOOLS: dict[str, dict[str, Any]] = {
     "china_email_start_setup": {
         "description": "Open a local browser setup wizard so users can configure an email account without editing JSON.",
@@ -1487,11 +1657,12 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": list_accounts,
     },
     "china_email_test_connection": {
-        "description": "Test IMAP and optionally SMTP login for a configured account.",
+        "description": "Test IMAP and optionally SMTP login, reporting the selected mailbox's IMAP-visible count.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "account": {"type": "string"},
+                **MAILBOX_PROPERTIES,
                 "check_imap": {"type": "boolean", "default": True},
                 "check_smtp": {"type": "boolean", "default": False},
             },
@@ -1499,15 +1670,27 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
         "handler": test_connection,
     },
+    "china_email_list_mailboxes": {
+        "description": "List exact IMAP mailbox names, readable display names, and server folder flags.",
+        "inputSchema": {"type": "object", "properties": {"account": {"type": "string"}}, "additionalProperties": False},
+        "handler": list_mailboxes,
+    },
     "china_email_search_messages": {
-        "description": "Search recent messages in a mailbox and return message summaries.",
+        "description": "Search one page of message summaries and report IMAP visibility, read failures, and pagination.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "account": {"type": "string"},
-                "mailbox": {"type": "string", "default": "INBOX"},
+                **MAILBOX_PROPERTIES,
                 "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "default": 10},
                 "scan_limit": {"type": "integer", "minimum": 1, "maximum": MAX_SCAN_LIMIT, "default": DEFAULT_SCAN_LIMIT},
+                "before_uid": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_UID,
+                    "description": "Exclusive cursor. Use next_before_uid from the previous page with the same account, mailbox and query.",
+                },
+                "uid_validity": UID_VALIDITY_PROPERTY,
                 "query": {
                     "type": "object",
                     "properties": {
@@ -1534,8 +1717,9 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["uid"],
             "properties": {
                 "account": {"type": "string"},
-                "mailbox": {"type": "string", "default": "INBOX"},
+                **MAILBOX_PROPERTIES,
                 "uid": {"type": "string"},
+                "uid_validity": UID_VALIDITY_PROPERTY,
                 "max_body_chars": {"type": "integer", "minimum": 100, "maximum": MAX_BODY_CHARS, "default": DEFAULT_BODY_CHARS},
                 "include_html": {"type": "boolean", "default": False},
             },
@@ -1550,8 +1734,9 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["uid"],
             "properties": {
                 "account": {"type": "string"},
-                "mailbox": {"type": "string", "default": "INBOX"},
+                **MAILBOX_PROPERTIES,
                 "uid": {"type": "string"},
+                "uid_validity": UID_VALIDITY_PROPERTY,
                 "output_dir": {"type": "string"},
             },
             "additionalProperties": False,
@@ -1684,4 +1869,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "setup":
         run_setup_wizard_cli()
     else:
+        sys.stdin.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8")
         run_stdio_server()

@@ -8,8 +8,8 @@ and custom enterprise mailboxes can all be configured with the same account form
 
 - List configured accounts without exposing secrets.
 - Test IMAP and SMTP login.
-- Search recent mailbox messages.
-- Read a single message by IMAP UID.
+- List IMAP folders, find the Sent mailbox, and search mailbox messages page by page.
+- Read a single message by mailbox and IMAP UID.
 - Save message attachments to a local folder.
 - Create real mailbox drafts for review by default, and send only when `dry_run` is explicitly `false`.
 
@@ -22,6 +22,14 @@ This plugin is registered by the repository marketplace file:
 ```
 
 When this repository is opened in Codex App, it appears as `国内邮箱` in the `国内插件市场` marketplace.
+
+## Reading inbox and sent mail
+
+`china_email_search_messages` defaults to `INBOX`. For sent mail, pass `mailbox_role: "sent"` to resolve the server's Sent folder. Use `china_email_list_mailboxes` to check available folders and pass the exact `name` as `mailbox` when selecting one manually.
+
+Each page returns up to 10 results by default. Set `limit` up to 50 and `scan_limit` up to 500 per page. If `has_more` is true, pass `next_before_uid` as `before_uid` with the same account, returned `mailbox`, query, and `uid_validity` when available. This also works when a page contains no matches. Pass the same mailbox and UID validity when reading a result or downloading its attachments.
+
+The response includes the IMAP-visible mailbox count, search candidate count, scanned count, and fetch failures. `empty_mailbox` means the IMAP server reported zero messages. `no_match`, `scan_incomplete`, `read_failed`, `partial_read`, and `imap_visibility_unknown` describe distinct results. Check the provider's IMAP sync range if webmail shows more messages than the server reports to the plugin.
 
 ## Configuration
 
