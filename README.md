@@ -8,15 +8,15 @@
 
 - `china-email`：国内邮箱插件，支持 QQ 邮箱、网易 163/126/yeah、腾讯企业邮箱、阿里企业邮箱、139 邮箱和自定义 IMAP/SMTP 邮箱。
 
-## 更新到 0.2.4
+## 更新到 0.2.5
 
-用 Git 克隆的用户可在仓库目录运行 `git pull`。用 ZIP 安装的用户请从 GitHub 重新下载源码。用 GitHub 地址添加市场的用户，请在 ChatGPT 桌面端升级「国内插件市场」，再到「国内邮箱」详情页确认版本为 `0.2.4`。已有邮箱配置可继续使用。
+用 Git 克隆的用户可在仓库目录运行 `git pull`。用 ZIP 安装的用户请从 GitHub 重新下载。用 GitHub 地址添加市场的用户，请在 ChatGPT 桌面端升级「国内插件市场」，再到「国内邮箱」详情页确认版本为 `0.2.5`。已有邮箱配置可继续使用。
 
 现在可以让 Codex「列出已发送的最近 30 封邮件」，也可以让它继续往前查。若收件箱返回空结果，可让 Codex「检查 INBOX 在 IMAP 服务器上的邮件数量，不加任何筛选，报告读取失败数」。
 
 ## 在 Codex 中使用
 
-插件在本机运行，需要 Python 3.10 或更新版本。Windows 用户可以从 [Python 官网](https://www.python.org/downloads/windows/) 安装 Python，安装时启用 Python 启动器或将 Python 加入 PATH，然后完全退出并重新打开 ChatGPT 桌面端。macOS/Linux 用户请确认终端执行 `python3 --version` 能看到版本号。
+Windows x64 和 ARM64 版插件自带运行时，安装后即可打开邮箱配置向导。macOS 和 Linux 用户需要在本机安装 Python 3.10 或更新版本。
 
 在 Codex App 中打开这个仓库后，插件市场会读取 `.agents/plugins/marketplace.json`，并展示 `国内插件市场` 下的 `国内邮箱` 插件。
 
@@ -28,7 +28,7 @@
 
 向导会在本机浏览器打开，用户选择邮箱服务商，填写邮箱地址和授权码，然后点保存即可，不需要手动改 JSON。
 
-如果点「立即使用」后提示缺少工具，先确认当前会话在本机运行，并确认插件版本与 Python 环境。Windows 可在 PowerShell 运行 `py -3 --version` 或 `python --version`。仍失败时，请保存客户端版本、插件版本和 MCP 启动错误，排查时无需提供邮箱授权码。
+如果当前会话无法调用邮箱工具，可在本机 Codex 会话输入 `/mcp`，确认连接列表里是否有 `china-email`。Windows 用户也可以在下载的仓库目录打开 PowerShell，运行 `.\plugins\china-email\bin\china-email.cmd setup`，直接打开同一个本机配置向导。查询或发送邮件时，仍需要会话成功连接邮箱服务。
 
 也可以手动配置：
 
