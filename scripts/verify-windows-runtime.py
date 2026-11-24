@@ -21,7 +21,8 @@ def verify_plugin(profile):
         if key.startswith(("CHINA_EMAIL_", "PYTHON")):
             env.pop(key)
     env["USERPROFILE"] = str(profile)
-    env["PATH"] = os.pathsep.join([str(Path(env["SystemRoot"]) / "System32"), env["SystemRoot"]])
+    system_root = Path(os.environ["SystemRoot"])
+    env["PATH"] = os.pathsep.join([str(system_root / "System32"), str(system_root)])
     assert not any(shutil.which(command, path=env["PATH"]) for command in ("py.exe", "python.exe", "python3.exe"))
 
     launcher = plugin / "bin" / "china-email.cmd"
