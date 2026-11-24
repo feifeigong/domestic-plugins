@@ -1,6 +1,6 @@
 {
   "name": "china-email",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Read, search, summarize, and send email through domestic IMAP/SMTP providers.",
   "author": {
     "name": "feifeigong"
@@ -16,6 +16,11 @@
   ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/setup-china-email/SKILL.md"
+    }
+  },
   "interface": {
     "displayName": "国内邮箱",
     "shortDescription": "连接 QQ、网易等国内邮箱",

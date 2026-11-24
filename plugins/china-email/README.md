@@ -33,7 +33,8 @@ The response includes the IMAP-visible mailbox count, search candidate count, sc
 
 ## Configuration
 
-The recommended path is the local setup wizard. After installing the plugin, ask Codex:
+After installing the plugin, select **Run setup** to open the local setup wizard. You can also
+open it from a local Work or Codex conversation:
 
 ```text
 打开国内邮箱配置向导

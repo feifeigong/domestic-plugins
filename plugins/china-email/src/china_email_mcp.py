@@ -31,7 +31,7 @@ from typing import Any, Callable
 
 
 SERVER_NAME = "china-email"
-SERVER_VERSION = "0.2.2"
+SERVER_VERSION = "0.2.3"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_CONFIG_PATH = pathlib.Path.home() / ".china-email" / "accounts.json"
 DEFAULT_ATTACHMENT_DIR = pathlib.Path.home() / "Downloads" / "china-email-attachments"
