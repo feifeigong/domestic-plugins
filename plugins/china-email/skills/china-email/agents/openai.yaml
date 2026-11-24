@@ -1,0 +1,3 @@
+interface:
+  display_name: "邮箱收发与管理"
+  short_description: "查阅 QQ、网易等邮箱的邮件，整理收件箱、保存附件、起草和发送邮件。"

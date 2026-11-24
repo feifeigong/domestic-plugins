@@ -1,41 +1,40 @@
 ---
 name: china-email
-description: Use domestic IMAP/SMTP email accounts such as QQ Mail, NetEase Mail, Ali Mail, Tencent Exmail, 139 Mail, or custom enterprise mailboxes to search messages, read email, save attachments, summarize inboxes, and draft or send replies.
+description: 查阅 QQ、网易、阿里、腾讯企业邮、139 邮箱和自定义企业邮箱的邮件，整理收件箱、保存附件、起草和发送邮件。
 ---
 
-# China Email
+# 邮箱收发与管理
 
-## Overview
+## 邮箱状态
 
-Use this skill when the user wants to work with domestic Chinese email accounts through the China Email plugin.
-The plugin is protocol-based, so prefer IMAP search and message reads before making claims about mailbox state.
+先通过 IMAP 搜索或读取邮件，再说明邮箱状态。
 
-## Setup Expectations
+## 邮箱配置
 
-- The mailbox must have IMAP/SMTP enabled in the provider's web settings.
-- The password should be an authorization code, app password, or client password.
-- Prefer `china_email_start_setup` for setup so users do not need to edit JSON.
-- The account config is saved to `~/.china-email/accounts.json` by the setup wizard, and can still be overridden with `CHINA_EMAIL_CONFIG` or single-account environment variables.
+- 在邮箱网页端启用 IMAP 和 SMTP。
+- 使用邮箱授权码、应用专用密码或客户端密码。
+- 优先调用 `china_email_start_setup` 打开配置向导。
+- 向导将账户配置保存在 `~/.china-email/accounts.json`。也可以通过 `CHINA_EMAIL_CONFIG` 或单账号环境变量指定配置。
 
-## Workflow
+## 操作步骤
 
-1. Call `china_email_list_accounts` first if the user did not specify which configured account to use.
-2. If no accounts are configured, call `china_email_start_setup` and give the user the returned local URL.
-3. Use `china_email_search_messages` to shortlist messages by sender, subject, date, unread state, or text. For the inbox, omit the mailbox or use `mailbox_role: "inbox"`. For 已发送, use `mailbox_role: "sent"`. If the server lists an ambiguous or unrecognized Sent mailbox, call `china_email_list_mailboxes` and ask the user which folder to use. Use the returned exact `name` as `mailbox`.
-4. Check `status`, `failed_count`, and `has_more` before describing an empty or short page. Follow `next_before_uid` as `before_uid` when the request needs more results. Keep the same account, resolved `mailbox`, query, and `uid_validity` when available. Continue past an empty page when `has_more` is true and the scan is needed to answer the user.
-5. Use `china_email_read_message` for the specific UID before summarizing that message or replying. Pass the search result's account name, exact `mailbox`, and `uid_validity` when available. Use the same identifiers with `china_email_save_attachments` when the user asks to download attachments.
-6. For drafts or replies, prefer `china_email_create_draft` so the message appears in the provider's Drafts mailbox for user review.
-7. For sending, call `china_email_send_email` with `dry_run: true` first unless the user explicitly asked to send immediately. With the current tool, `dry_run: true` saves a mailbox draft by default; use `preview_only: true` only when the user wants chat-only preview text.
+1. 用户未指定已配置的邮箱时，先调用 `china_email_list_accounts`。
+2. 如果还没有邮箱账号，调用 `china_email_start_setup`，提供返回的本机向导链接。
+3. 用 `china_email_search_messages` 按发件人、主题、日期、未读状态或正文搜索。收件箱可以省略 `mailbox` 或传入 `mailbox_role: "inbox"`。已发送使用 `mailbox_role: "sent"`。服务器的已发送目录无法识别或有歧义时，调用 `china_email_list_mailboxes`，请用户确认目录，并将该目录的原始 `name` 传入 `mailbox`。
+4. 当结果为空或少于预期时，先检查 `status`、`failed_count` 和 `has_more`。还需要更多结果时，将 `next_before_uid` 传入 `before_uid`，沿用相同的账号、目录、查询和可用的 `uid_validity`。当前页为空且 `has_more` 为真时，如需完成查询，继续翻页。
+5. 总结或回复前，用 `china_email_read_message` 按 UID 读取邮件。沿用搜索结果中的账号、原始 `mailbox` 和可用的 `uid_validity`。下载附件时，将相同标识传给 `china_email_save_attachments`。
+6. 起草邮件或回复时，优先使用 `china_email_create_draft`，将草稿存到邮箱的草稿箱供用户查看。
+7. 用户明确要求立即发送时，才直接发送。其他发送请求先调用 `china_email_send_email` 并设置 `dry_run: true`，默认在邮箱里保存草稿。用户只想在聊天里预览时，再设置 `preview_only: true`。
 
-## Write Safety
+## 邮件操作范围
 
-- Never expose configured passwords or authorization codes.
-- Preserve exact recipients, subjects, dates, and quoted facts from source messages.
-- Treat `dry_run: false` as a real send operation and use it only with explicit user intent.
-- Do not delete, archive, mark read, move, or label messages in this MVP.
+- 邮箱密码和授权码仅用于本机邮箱连接，回复中须隐藏。
+- 保留原邮件里的实际收件人、主题、日期和引用事实。
+- `dry_run: false` 会实际发送邮件，仅在用户明确要求时使用。
+- 邮件写入操作限于保存草稿和发送。
 
-## Output Conventions
+## 结果说明
 
-- Summaries should state the mailbox and search scope. `empty_mailbox` means the IMAP server reported zero visible messages. `no_match` means no matches in the completed search scope. `scan_incomplete` means older candidates remain. `read_failed` or `partial_read` means one or more fetches failed. `imap_visibility_unknown` means the IMAP response did not confirm an empty mailbox.
-- Draft replies should be saved to the mailbox Drafts folder when possible, with a clear subject and recipient list.
-- If the IMAP-visible count differs from webmail, report the visible count and check the provider's IMAP sync scope.
+- 总结时说明目录和搜索范围。`empty_mailbox` 表示 IMAP 服务器报告可见邮件为零。`no_match` 表示在已完成的查询范围内没有匹配结果。`scan_incomplete` 表示还有更早的候选邮件。`read_failed` 或 `partial_read` 表示至少一封邮件读取失败。`imap_visibility_unknown` 表示服务器响应无法确认邮箱为空。
+- 尽量将回复草稿保存到邮箱的草稿箱，写清主题和收件人。
+- IMAP 可见数量与网页版不一致时，说明服务器返回的可见数量，并检查服务商的 IMAP 同步范围。

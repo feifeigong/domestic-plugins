@@ -1,7 +1,7 @@
 {
   "name": "china-email",
-  "version": "0.2.3",
-  "description": "Read, search, summarize, and send email through domestic IMAP/SMTP providers.",
+  "version": "0.2.4",
+  "description": "连接 QQ、网易等国内邮箱，搜索、阅读和整理邮件，保存附件，起草和发送邮件。",
   "author": {
     "name": "feifeigong"
   },
@@ -24,7 +24,7 @@
   "interface": {
     "displayName": "国内邮箱",
     "shortDescription": "连接 QQ、网易等国内邮箱",
-    "longDescription": "Use domestic IMAP/SMTP mailboxes such as QQ Mail, NetEase Mail, Ali Mail, and 139 Mail to search inboxes, read threads, save attachments, and draft or send email from Codex.",
+    "longDescription": "支持 QQ 邮箱、网易 163、126 和 yeah 邮箱、阿里企业邮箱、腾讯企业邮、139 邮箱以及自定义企业邮箱。可以搜索和阅读邮件、整理收件箱、保存附件、起草回复和发送邮件。",
     "developerName": "feifeigong",
     "category": "Productivity",
     "capabilities": [

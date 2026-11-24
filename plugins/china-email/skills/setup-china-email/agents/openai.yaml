@@ -1,0 +1,3 @@
+interface:
+  display_name: "邮箱配置向导"
+  short_description: "在本机浏览器打开配置向导，添加 QQ、网易等国内邮箱。"

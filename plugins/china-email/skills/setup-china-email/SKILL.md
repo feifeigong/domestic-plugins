@@ -1,6 +1,6 @@
 ---
 name: setup-china-email
-description: Open the domestic email setup wizard when the user runs plugin setup or asks to add a domestic mailbox.
+description: 在本机浏览器打开配置向导，用于首次设置插件或新增 QQ、网易等国内邮箱账号。
 ---
 
 # 配置国内邮箱
