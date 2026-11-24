@@ -117,11 +117,7 @@ Then send JSON-RPC messages over stdin. For example:
 
 ## Runtime Requirements
 
-Use a local Work or Codex conversation in the ChatGPT desktop app. The plugin runs a local
-stdio server with Python 3.10 or newer.
-On Windows, the launcher tries `py -3` first and then Python executables on PATH.
-On macOS and Linux, it tries `python3` and then `python`.
-
-On Windows, verify Python with `py -3 --version` or `python --version`. On macOS
-and Linux, use `python3 --version`. After installing Python or changing PATH,
-fully quit and reopen the desktop app before starting a new local conversation.
+Use a local Work or Codex conversation in the ChatGPT desktop app.
+Windows x64 and ARM64 ship with an embedded Python runtime under `runtime/windows`.
+To open the wizard independently on Windows, run `bin\china-email.cmd setup`.
+On macOS and Linux, install Python 3.10 or newer. The launcher tries `python3` and then `python`.

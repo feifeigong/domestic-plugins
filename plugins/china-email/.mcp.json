@@ -2,7 +2,11 @@
   "mcpServers": {
     "china-email": {
       "command": "./bin/china-email",
-      "cwd": "."
+      "cwd": ".",
+      "env_vars": [
+        "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_ARCHITEW6432"
+      ]
     }
   }
 }
