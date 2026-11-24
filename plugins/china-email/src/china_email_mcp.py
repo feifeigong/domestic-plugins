@@ -600,7 +600,9 @@ def unquote_imap(value: str) -> str:
 def fetch_mailboxes(client: imaplib.IMAP4) -> list[dict[str, Any]]:
     if "SPECIAL-USE" in client.capabilities:
         try:
-            status, response = client.list('""', '"*" RETURN (SPECIAL-USE)')
+            # LIST's return clause is a separate IMAP token, not part of the mailbox pattern.
+            status, data = client._simple_command("LIST", '""', '"*"', "RETURN (SPECIAL-USE)")
+            status, response = client._untagged_response(status, data, "LIST")
         except imaplib.IMAP4.abort:
             raise
         except imaplib.IMAP4.error:
