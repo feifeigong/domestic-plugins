@@ -114,21 +114,13 @@ Then send JSON-RPC messages over stdin. For example:
 - Keep sending as an explicit action. The `china_email_send_email` tool defaults to `dry_run`, which writes a mailbox draft unless `preview_only` is set.
 - Attachment writes default to `~/Downloads/china-email-attachments`.
 
-## Windows Notes
+## Runtime Requirements
 
-The checked-in `.mcp.json` uses `python3`, which works on macOS and many developer machines.
-For Windows, change the command to `py` or the absolute path to the Python executable if needed:
+Use a local Work or Codex conversation in the ChatGPT desktop app. The plugin runs a local
+stdio server with Python 3.10 or newer.
+On Windows, the launcher tries `py -3` first and then Python executables on PATH.
+On macOS and Linux, it tries `python3` and then `python`.
 
-```json
-{
-  "mcpServers": {
-    "china-email": {
-      "command": "py",
-      "args": ["-3", "./src/china_email_mcp.py"],
-      "cwd": "."
-    }
-  }
-}
-```
-
-Longer term, this plugin should be packaged with a launcher so users do not need to edit `.mcp.json`.
+On Windows, verify Python with `py -3 --version` or `python --version`. On macOS
+and Linux, use `python3 --version`. After installing Python or changing PATH,
+fully quit and reopen the desktop app before starting a new local conversation.

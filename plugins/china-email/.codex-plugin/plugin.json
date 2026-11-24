@@ -1,6 +1,6 @@
 {
   "name": "china-email",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Read, search, summarize, and send email through domestic IMAP/SMTP providers.",
   "author": {
     "name": "feifeigong"

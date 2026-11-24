@@ -1,0 +1,11 @@
+#!/bin/sh
+
+server="$(dirname "$0")/../src/china_email_mcp.py"
+for python in python3 python; do
+    if "$python" -c 'import sys; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
+        exec "$python" -u "$server"
+    fi
+done
+
+printf '%s\n' '[china-email] Python 3.10+ is required. Install Python and restart ChatGPT.' >&2
+exit 1

@@ -1,10 +1,7 @@
 {
   "mcpServers": {
     "china-email": {
-      "command": "python3",
-      "args": [
-        "./src/china_email_mcp.py"
-      ],
+      "command": "./bin/china-email",
       "cwd": "."
     }
   }
