@@ -1,6 +1,6 @@
 {
   "name": "china-email",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "连接 QQ、网易等国内邮箱，搜索、阅读和整理邮件，保存附件，起草和发送邮件。",
   "author": {
     "name": "feifeigong"

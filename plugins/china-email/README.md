@@ -23,13 +23,23 @@ This plugin is registered by the repository marketplace file:
 
 When this repository is opened in Codex App, it appears as `国内邮箱` in the `国内插件市场` marketplace.
 
-## Reading inbox and sent mail
+## 搜索邮件
 
-`china_email_search_messages` defaults to `INBOX`. For sent mail, pass `mailbox_role: "sent"` to resolve the server's Sent folder. Use `china_email_list_mailboxes` to check available folders and pass the exact `name` as `mailbox` when selecting one manually.
+`china_email_search_messages` 默认查收件箱 `INBOX`。查询已发送目录时，使用 `mailbox_role: "sent"`。查整个邮箱时，先用 `china_email_list_mailboxes` 查看 IMAP 可见目录，再按需要查询收件箱、归档或自定义目录。指定目录时，将列表返回的原始 `name` 传给 `mailbox`。
 
-Each page returns up to 10 results by default. Set `limit` up to 50 and `scan_limit` up to 500 per page. If `has_more` is true, pass `next_before_uid` as `before_uid` with the same account, returned `mailbox`, query, and `uid_validity` when available. This also works when a page contains no matches. Pass the same mailbox and UID validity when reading a result or downloading its attachments.
+日期使用 `YYYY-MM-DD`。`since` 和 `through` 都包含当天，`before` 不包含当天，`through` 与 `before` 只能选一个。例如查询 2026 年 9 月，可用以下条件。
 
-The response includes the IMAP-visible mailbox count, search candidate count, scanned count, and fetch failures. `empty_mailbox` means the IMAP server reported zero messages. `no_match`, `scan_incomplete`, `read_failed`, `partial_read`, and `imap_visibility_unknown` describe distinct results. Check the provider's IMAP sync range if webmail shows more messages than the server reports to the plugin.
+```json
+{"query": {"since": "2026-09-01", "through": "2026-09-30", "date_field": "received"}}
+```
+
+`date_field` 默认是 `received`，按服务器记录的收件日期筛选。若按邮件上展示的邮件头日期筛选，使用 `date_field: "sent"`。日期口径与邮件所在目录独立设置。
+
+每页默认最多返回 10 个结果，`limit` 最大 50，`scan_limit` 每页最大 500。要查完指定范围，`has_more` 为真时，将 `next_before_uid` 传给下一页的 `before_uid`。沿用相同的账号、目录、查询和可用的 `uid_validity`，即使某一页没有结果也可继续。各目录分别分页。读取邮件和下载附件时也沿用相同的目录与可用的 `uid_validity`。
+
+结果会区分 IMAP 报告的目录总数、搜索候选数、已扫描数和读取失败数。`empty_mailbox` 表示服务器报告该目录有零封可见邮件。`no_match` 表示已查范围内没有匹配结果。`scan_incomplete` 表示仍有候选未扫描。`read_failed` 和 `partial_read` 表示有邮件读取失败。`imap_visibility_unknown` 表示无法确认该目录是否为空。`imap_count_mismatch: true` 表示首页在 IMAP 服务器上执行全量搜索时，服务器报告的目录总数与搜索候选数不一致。
+
+如果只查了收件箱却找不到历史邮件，先核对日期口径。若依据邮件头日期，可在同一目录用 `date_field: "sent"` 复查。有已知主题或发件人时，也可去掉日期条件复查。若需要核对归档或自定义目录，请分别查询并区分各目录结果。网页版与 IMAP 不一致时，先确认账号和实际目录一致，再检查服务商的 IMAP 同步范围。
 
 ## Configuration
 

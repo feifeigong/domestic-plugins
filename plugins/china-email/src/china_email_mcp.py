@@ -31,7 +31,7 @@ from typing import Any, Callable
 
 
 SERVER_NAME = "china-email"
-SERVER_VERSION = "0.2.5"
+SERVER_VERSION = "0.2.6"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_CONFIG_PATH = pathlib.Path.home() / ".china-email" / "accounts.json"
 DEFAULT_ATTACHMENT_DIR = pathlib.Path.home() / "Downloads" / "china-email-attachments"
@@ -390,9 +390,18 @@ def to_text(value: Any) -> str:
     return str(value)
 
 
-def parse_date(value: str) -> str:
-    parsed = dt.date.fromisoformat(value)
+def format_imap_date(parsed: dt.date) -> str:
     return f"{parsed.day:02}-{IMAP_MONTHS[parsed.month - 1]}-{parsed.year:04}"
+
+
+def parse_search_date(query: dict[str, Any], field: str) -> dt.date | None:
+    value = query.get(field)
+    if value is None:
+        return None
+    try:
+        return dt.date.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ToolError(f"{field} must be an ISO date, for example 2026-09-30.") from exc
 
 
 def clamp_int(value: Any, default_value: int, min_value: int, max_value: int) -> int:
@@ -415,16 +424,29 @@ def extract_uid_list(response: list[bytes]) -> list[int]:
     return sorted(uids, reverse=True)
 
 
-def build_search_criteria(query: dict[str, Any]) -> list[str]:
+def build_search_criteria(query: dict[str, Any], date_field: str) -> list[str]:
+    since = parse_search_date(query, "since")
+    before = parse_search_date(query, "before")
+    through = parse_search_date(query, "through")
+    if through is not None:
+        if before is not None:
+            raise ToolError("Specify either before (exclusive) or through (inclusive).")
+        if through == dt.date.max:
+            raise ToolError("through must be earlier than 9999-12-31.")
+        before = through + dt.timedelta(days=1)
+    if since is not None and before is not None and since >= before:
+        raise ToolError("since must be earlier than before and cannot be later than through.")
+
     criteria = ["ALL"]
     if query.get("unread") is True:
         criteria.append("UNSEEN")
     if query.get("flagged") is True:
         criteria.append("FLAGGED")
-    if query.get("since"):
-        criteria.extend(["SINCE", parse_date(str(query["since"]))])
-    if query.get("before"):
-        criteria.extend(["BEFORE", parse_date(str(query["before"]))])
+    prefix = "SENT" if date_field == "sent" else ""
+    if since is not None:
+        criteria.extend([f"{prefix}SINCE", format_imap_date(since)])
+    if before is not None:
+        criteria.extend([f"{prefix}BEFORE", format_imap_date(before)])
     return criteria
 
 
@@ -1347,14 +1369,16 @@ def search_status(message_count: int | None, criteria: list[str], returned: int,
 
 
 def search_messages(args: dict[str, Any]) -> dict[str, Any]:
-    account = resolve_account(args.get("account"))
     query = args.get("query") or {}
     if not isinstance(query, dict):
         raise ToolError("query must be an object.")
+    date_field = query.get("date_field", "received")
+    if date_field not in ("received", "sent"):
+        raise ToolError("date_field must be received or sent.")
 
     limit = clamp_int(args.get("limit"), 10, 1, MAX_LIMIT)
     scan_limit = clamp_int(args.get("scan_limit"), DEFAULT_SCAN_LIMIT, 1, MAX_SCAN_LIMIT)
-    criteria = build_search_criteria(query)
+    criteria = build_search_criteria(query, date_field)
     before_arg = args.get("before_uid")
     before_uid = parse_uid_number(before_arg, "before_uid") if before_arg is not None else None
     search_criteria = criteria if before_uid is None else [*criteria, "UID", f"1:{before_uid - 1}"]
@@ -1362,6 +1386,7 @@ def search_messages(args: dict[str, Any]) -> dict[str, Any]:
     messages: list[dict[str, Any]] = []
     read_errors: list[dict[str, str]] = []
     scanned_count = failed_count = 0
+    account = resolve_account(args.get("account"))
     client = connect_imap(account)
     try:
         mailbox = resolve_mailbox(client, args)
@@ -1399,16 +1424,21 @@ def search_messages(args: dict[str, Any]) -> dict[str, Any]:
             pass
 
     has_more = scanned_count < len(candidate_uids)
+    imap_count_mismatch = (
+        search_criteria == ["ALL"] and mailbox_count is not None and mailbox_count != len(candidate_uids)
+    )
     return tool_result(
         {
             "account": public_account(account),
             "mailbox": mailbox,
             "criteria": criteria,
+            "date_field": date_field,
             "scan_limit": scan_limit,
             "limit": limit,
             "status": search_status(mailbox_count, search_criteria, len(messages), scanned_count, failed_count, has_more),
             "mailbox_message_count": mailbox_count,
             "candidate_count": len(candidate_uids),
+            "imap_count_mismatch": imap_count_mismatch,
             "scanned_count": scanned_count,
             "failed_count": failed_count,
             "read_errors": read_errors,
@@ -1678,7 +1708,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": list_mailboxes,
     },
     "china_email_search_messages": {
-        "description": "Search one page of message summaries and report IMAP visibility, read failures, and pagination.",
+        "description": "Search one folder and return one page of summaries. candidate_count counts the server matches before local text filters and pagination. Continue if has_more is true, even for an empty page. If a historical search is unexpectedly empty, check the date basis and list visible folders before concluding.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1700,8 +1730,15 @@ TOOLS: dict[str, dict[str, Any]] = {
                         "to": {"type": "string"},
                         "subject": {"type": "string"},
                         "text": {"type": "string"},
-                        "since": {"type": "string", "description": "ISO date, for example 2026-04-01"},
-                        "before": {"type": "string", "description": "ISO date, for example 2026-05-01"},
+                        "since": {"type": "string", "description": "Inclusive start date in YYYY-MM-DD, for example 2026-09-01."},
+                        "before": {"type": "string", "description": "Exclusive end date in YYYY-MM-DD. Use 2026-10-01 for all of September. Omit when using through."},
+                        "through": {"type": "string", "description": "Inclusive end date in YYYY-MM-DD. Use 2026-09-30 for all of September. Omit when using before."},
+                        "date_field": {
+                            "type": "string",
+                            "enum": ["received", "sent"],
+                            "default": "received",
+                            "description": "received uses the server's IMAP internal date. sent uses the message Date header (including in Inbox).",
+                        },
                         "unread": {"type": "boolean"},
                         "flagged": {"type": "boolean"},
                     },

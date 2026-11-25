@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def verify_plugin(profile):
     source = ROOT / "plugins" / "china-email"
+    manifest = json.loads((source / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     plugin = profile / "本地 邮箱"
     shutil.copytree(source, plugin)
     settings = profile / ".china-email" / "accounts.json"
@@ -49,7 +50,7 @@ def verify_plugin(profile):
                 "protocolVersion": "2025-06-18", "capabilities": {},
                 "clientInfo": {"name": "bundled-runtime-check", "version": "1"},
             })
-            assert initialization["serverInfo"]["version"] == "0.2.5"
+            assert initialization["serverInfo"]["version"] == manifest["version"]
             names = {entry["name"] for entry in rpc("tools/list")["tools"]}
             assert len(names) == 10 and "china_email_start_setup" in names
             assert tool("china_email_list_accounts")["accounts"] == []

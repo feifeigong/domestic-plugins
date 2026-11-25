@@ -5,8 +5,10 @@ from __future__ import annotations
 import imaplib
 import json
 import os
+from datetime import date, datetime, timezone
 from email.message import EmailMessage
 from email.policy import SMTP
+from email.utils import format_datetime
 from pathlib import Path
 import re
 import runpy
@@ -19,6 +21,8 @@ from unittest.mock import patch
 
 PLUGIN = Path(__file__).resolve().parents[1]
 SERVER = runpy.run_path(str(PLUGIN / "src/china_email_mcp.py"))
+DEFAULT_INTERNAL_DATE = date(2026, 11, 2)
+DEFAULT_HEADER_DATE = datetime(2026, 11, 2, 8, tzinfo=timezone.utc)
 SENT_NAME = "&XfJT0ZAB-"
 LISTING = [
     r'(\HasNoChildren) "/" INBOX',
@@ -110,6 +114,24 @@ class ImapPeer:
             uids = list(self.fixture.folders[self.mailbox])
             if self.fixture.empty_search or "UNSEEN" in args:
                 uids = []
+            hidden = self.fixture.hidden_search_uids.get(self.mailbox, ())
+            uids = [uid for uid in uids if uid not in hidden]
+            for key, value in re.findall(r"\b(SENTSINCE|SENTBEFORE|SINCE|BEFORE) (\d{1,2}-[A-Za-z]{3}-\d{4})\b", args):
+                boundary = datetime.strptime(value, "%d-%b-%Y").date()
+                if key.startswith("SENT"):
+                    message_dates = [
+                        (uid, self.fixture.header_dates.get((self.mailbox, uid), DEFAULT_HEADER_DATE).date())
+                        for uid in uids
+                    ]
+                else:
+                    message_dates = [
+                        (uid, self.fixture.internal_dates.get((self.mailbox, uid), DEFAULT_INTERNAL_DATE))
+                        for uid in uids
+                    ]
+                if key.endswith("SINCE"):
+                    uids = [uid for uid, value in message_dates if value >= boundary]
+                else:
+                    uids = [uid for uid, value in message_dates if value < boundary]
             cutoff = re.search(r"\bUID 1:(\d+)$", args)
             if cutoff and not self.fixture.ignore_cutoff:
                 uids = [uid for uid in uids if uid <= int(cutoff[1])]
@@ -132,7 +154,7 @@ class ImapPeer:
             message["Subject"] = f"{self.mailbox} mail #{uid:04d}"
             message["From"] = "sender@example.test"
             message["To"] = "receiver@example.test"
-            message["Date"] = "Mon, 02 Nov 2026 08:00:00 +0000"
+            message["Date"] = format_datetime(self.fixture.header_dates.get((self.mailbox, uid), DEFAULT_HEADER_DATE))
             message.set_content(f"body marker {uid:04d}")
             if uid == 1:
                 message.add_attachment(b"attachment bytes", maintype="application", subtype="octet-stream", filename="test.bin")
@@ -174,6 +196,9 @@ class MailboxReadingTests(unittest.TestCase):
         self.omit_exists = self.unordered_search = self.fail_body = False
         self.uid_validity = 77
         self.fetch_failures = {}
+        self.hidden_search_uids = {}
+        self.internal_dates = {}
+        self.header_dates = {}
         self.commands = []
         self.appended = []
         self.account = {
@@ -243,6 +268,7 @@ class MailboxReadingTests(unittest.TestCase):
         self.assertEqual(page["candidate_count"], 150)
         self.assertEqual(page["scanned_count"], 10)
         self.assertEqual(page["status"], "ok")
+        self.assertFalse(page["imap_count_mismatch"])
         self.assertEqual([int(mail["uid"]) for mail in page["messages"]], list(range(150, 140, -1)))
         self.assertIn("EXAMINE INBOX", self.commands)
 
@@ -293,6 +319,75 @@ class MailboxReadingTests(unittest.TestCase):
         self.assertIsNone(next_page["next_before_uid"])
         uids = [int(item["uid"]) for item in page["messages"] + next_page["messages"]]
         self.assertEqual(uids, list(range(70, 0, -1)))
+
+    def test_inclusive_date_range_and_exclusive_before_through_pagination(self):
+        self.folders["INBOX"] = [1, 2, 3, 4]
+        self.internal_dates = {
+            ("INBOX", 1): date(2026, 8, 31),
+            ("INBOX", 2): date(2026, 9, 1),
+            ("INBOX", 3): date(2026, 9, 30),
+            ("INBOX", 4): date(2026, 10, 1),
+        }
+        query = {"since": "2026-09-01", "through": "2026-09-30"}
+        page = self.ok("search_messages", query=query, limit=1)
+        self.assertEqual(page["date_field"], "received")
+        self.assertEqual(page["candidate_count"], 2)
+        self.assertEqual([item["uid"] for item in page["messages"]], ["3"])
+        self.assertTrue(page["has_more"])
+        self.assertIn("UID SEARCH ALL SINCE 01-Sep-2026 BEFORE 01-Oct-2026", self.commands)
+        older = self.next_page(page, query=query, limit=1)
+        self.assertEqual([item["uid"] for item in older["messages"]], ["2"])
+        self.assertFalse(older["has_more"])
+        self.assertIn("UID SEARCH ALL SINCE 01-Sep-2026 BEFORE 01-Oct-2026 UID 1:2", self.commands)
+        equivalent = self.ok("search_messages", query={"since": "2026-09-01", "before": "2026-10-01"})
+        self.assertEqual([item["uid"] for item in equivalent["messages"]], ["3", "2"])
+        excluded = self.ok("search_messages", query={"since": "2026-09-01", "before": "2026-09-30"})
+        self.assertEqual([item["uid"] for item in excluded["messages"]], ["2"])
+
+    def test_sent_date_and_received_date_are_distinct(self):
+        self.folders[SENT_NAME] = [1, 2]
+        self.internal_dates[(SENT_NAME, 1)] = date(2026, 10, 1)
+        self.internal_dates[(SENT_NAME, 2)] = date(2026, 9, 30)
+        self.header_dates[(SENT_NAME, 1)] = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)
+        self.header_dates[(SENT_NAME, 2)] = datetime(2026, 10, 1, 0, 1, tzinfo=timezone.utc)
+        dates = {"since": "2026-09-01", "through": "2026-09-30"}
+        sent = self.ok("search_messages", mailbox_role="sent", query={**dates, "date_field": "sent"})
+        self.assertEqual(sent["date_field"], "sent")
+        self.assertEqual([item["uid"] for item in sent["messages"]], ["1"])
+        self.assertEqual(sent["messages"][0]["date"], "2026-09-30T23:59:00+00:00")
+        self.assertIn("UID SEARCH ALL SENTSINCE 01-Sep-2026 SENTBEFORE 01-Oct-2026", self.commands)
+        received = self.ok("search_messages", mailbox_role="sent", query={**dates, "date_field": "received"})
+        self.assertEqual([item["uid"] for item in received["messages"]], ["2"])
+
+    def test_invalid_or_conflicting_date_arguments(self):
+        cases = (
+            ({"through": "2026-09-30", "before": "2026-10-01"}, "through"),
+            ({"through": "2026-09-31"}, "through"),
+            ({"through": "9999-12-31"}, "through"),
+            ({"since": "2026-10-01", "through": "2026-09-30"}, "since"),
+            ({"since": "2026-10-02", "before": "2026-10-01"}, "since"),
+            ({"since": "2026-09"}, "since"),
+            ({"date_field": "header"}, "date_field"),
+        )
+        for query, expected_error in cases:
+            with self.subTest(query=query):
+                self.error("search_messages", expected_error, query=query)
+        self.assertFalse(any("UID SEARCH" in command for command in self.commands))
+
+    def test_archive_requires_an_explicit_mailbox_scope(self):
+        self.folders["Archive"] = [1]
+        self.listing.append(r'(\Archive \HasNoChildren) "/" Archive')
+        self.internal_dates[("Archive", 1)] = date(2026, 9, 30)
+        query = {"since": "2026-09-01", "through": "2026-09-30"}
+        inbox = self.ok("search_messages", query=query)
+        self.assertEqual(inbox["mailbox"], "INBOX")
+        self.assertEqual(inbox["candidate_count"], 0)
+        listed = self.ok("list_mailboxes")["mailboxes"]
+        archive = next(folder for folder in listed if folder["name"] == "Archive")
+        self.assertTrue(archive["selectable"])
+        archived = self.ok("search_messages", mailbox=archive["name"], query=query)
+        self.assertEqual(archived["candidate_count"], 1)
+        self.assertEqual(archived["messages"][0]["uid"], "1")
 
     def test_cursor_advances_even_if_server_ignores_uid_range(self):
         self.ignore_cutoff = True
@@ -349,6 +444,23 @@ class MailboxReadingTests(unittest.TestCase):
         page = self.ok("search_messages")
         self.assertIsNone(page["mailbox_message_count"])
         self.assertEqual(page["status"], "imap_visibility_unknown")
+
+    def test_imap_count_mismatch_only_for_initial_imap_search_all(self):
+        self.folders["INBOX"] = [1, 2, 3]
+        self.hidden_search_uids["INBOX"] = {1}
+        page = self.ok("search_messages", limit=1)
+        self.assertEqual(page["status"], "ok")
+        self.assertEqual(page["mailbox_message_count"], 3)
+        self.assertEqual(page["candidate_count"], 2)
+        self.assertTrue(page["imap_count_mismatch"])
+        next_page = self.next_page(page, limit=1)
+        self.assertFalse(next_page["imap_count_mismatch"])
+        filtered = self.ok("search_messages", query={"since": "2026-11-02"})
+        self.assertFalse(filtered["imap_count_mismatch"])
+        filtered_by_subject = self.ok("search_messages", query={"subject": "INBOX mail"})
+        self.assertTrue(filtered_by_subject["imap_count_mismatch"])
+        self.omit_exists = True
+        self.assertFalse(self.ok("search_messages")["imap_count_mismatch"])
 
     def test_all_header_failures_stay_visible(self):
         self.folders["INBOX"] = [9, 10]
@@ -412,7 +524,7 @@ class MailboxReadingTests(unittest.TestCase):
         self.assertTrue(any(command.startswith('APPEND "Draft Copies" ') for command in self.commands))
         self.assertTrue(draft["draft_saved"])
         self.assertIn(b"Draft body", self.appended[0])
-        self.assertEqual(SERVER["parse_date"]("2026-11-02"), "02-Nov-2026")
+        self.assertEqual(SERVER["format_imap_date"](date(2026, 11, 2)), "02-Nov-2026")
 
 
 if __name__ == "__main__":
