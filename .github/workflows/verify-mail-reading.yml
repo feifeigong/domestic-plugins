@@ -1,0 +1,27 @@
+name: Verify domestic email 0.2.6
+on:
+  push:
+    branches: ['stage/mail-reading-026']
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        include:
+          - { runner: windows-2025, architecture: amd64 }
+          - { runner: windows-11-arm, architecture: arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Exercise the bundled runtime without system Python
+        run: |
+          $python = './plugins/china-email/runtime/windows/${{ matrix.architecture }}/python.exe'
+          & $python -V
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python ./scripts/verify-windows-runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -m unittest discover -s ./plugins/china-email/tests
